@@ -368,53 +368,105 @@ void cargoHandling(int dock, int msg_que, int dock_cranes[][MAX_DOCK_CATEGORY]) 
     msg.shipId = ships_in_docks[dock].shipId;
     msg.direction = ships_in_docks[dock].direction;
 
-    int used_cargo[MAX_CARGO_COUNT] = {0};
-
     int numCrane = docks_cat[dock];
     int numCargo = ships_in_docks[dock].numCargo;
 
-    for (int craneId = 0; craneId < numCrane; craneId++) {
-        int crane_cap = dock_cranes[dock][craneId];
+    int direction = ships_in_docks[dock].direction;
 
-        int chosenCargoId = -1;
-        int leastWastedCapacity = 1e9;
+    if (direction == 1) {
+        // UNLOADING (Already existing)
+        int used_cargo[MAX_CARGO_COUNT] = {0};
 
-        for (int cargoId = 0; cargoId < numCargo; cargoId++) {
-            int weight = ships_in_docks[dock].cargo[cargoId];
+        for (int craneId = 0; craneId < numCrane; craneId++) {
+            int crane_cap = dock_cranes[dock][craneId];
+            int chosenCargoId = -1;
+            int leastWastedCapacity = 1e9;
 
-            if (weight == 0 || used_cargo[cargoId] || weight > crane_cap) {
-                continue;
+            for (int cargoId = 0; cargoId < numCargo; cargoId++) {
+                int weight = ships_in_docks[dock].cargo[cargoId];
+                if (weight == 0 || used_cargo[cargoId] || weight > crane_cap) continue;
+
+                int waste = crane_cap - weight;
+                if (waste < leastWastedCapacity) {
+                    leastWastedCapacity = waste;
+                    chosenCargoId = cargoId;
+                }
             }
 
-            int waste = crane_cap - weight;
-            if (waste < leastWastedCapacity) {
-                leastWastedCapacity = waste;
-                chosenCargoId = cargoId;
+            if (chosenCargoId != -1) {
+                msg.craneId = craneId;
+                msg.cargoId = chosenCargoId;
+
+                if (msgsnd(msg_que, &msg, sizeof(msg) - sizeof(msg.mtype), 0) == -1) {
+                    perror("Failed to send cargo handling message");
+                    exit(1);
+                }
+
+                used_cargo[chosenCargoId] = 1;
+                ships_in_docks[dock].cargo[chosenCargoId] = 0;  // Unload
+                lastHandledCargoTs[dock] = TimeStep;
+
+                printf("UNLOAD: Ship %d - cargo_id %d - crane %d - capacity %d\n",
+                       ships_in_docks[dock].shipId,
+                       chosenCargoId,
+                       craneId,
+                       crane_cap);
             }
         }
 
-        if (chosenCargoId != -1) {
-            msg.craneId = craneId;
-            msg.cargoId = chosenCargoId;
+    } else if (direction == 0) {
+        // LOADING
+        int used_dock_storage[MAX_CARGO_COUNT] = {0};
 
-            if (msgsnd(msg_que, &msg, sizeof(msg) - sizeof(msg.mtype), 0) == -1) {
-                perror("Failed to send cargo handling message");
-                exit(1);
+        for (int craneId = 0; craneId < numCrane; craneId++) {
+            int crane_cap = dock_cranes[dock][craneId];
+            int chosenCargoId = -1;
+            int leastWastedCapacity = 1e9;
+
+            // Find empty slot in ship
+            int empty_slot = -1;
+            for (int i = 0; i < numCargo; i++) {
+                if (ships_in_docks[dock].cargo[i] == 0) {
+                    empty_slot = i;
+                    break;
+                }
             }
 
-            used_cargo[chosenCargoId] = 1;
-            ships_in_docks[dock].cargo[chosenCargoId] = 0;
-            lastHandledCargoTs[dock] = TimeStep;
+            if (empty_slot == -1) continue;  // Ship full
 
-            printf("Ship %d with- cargo_id %d,item-%d - assigned to crane %d of Capacity %d\n",
-                   ships_in_docks[dock].shipId,
-                   
-                   chosenCargoId,
-                   ships_in_docks[dock].numCargo,
-                   
-            
-                   craneId,
-                   dock_cranes[dock][craneId]);
+            // Find best cargo from dock storage
+            for (int cargoId = 0; cargoId < MAX_CARGO_COUNT; cargoId++) {
+                int weight = dock_storage[dock][cargoId];
+                if (weight == 0 || used_dock_storage[cargoId] || weight > crane_cap) continue;
+
+                int waste = crane_cap - weight;
+                if (waste < leastWastedCapacity) {
+                    leastWastedCapacity = waste;
+                    chosenCargoId = cargoId;
+                }
+            }
+
+            if (chosenCargoId != -1 && empty_slot != -1) {
+                msg.craneId = craneId;
+                msg.cargoId = chosenCargoId;
+
+                if (msgsnd(msg_que, &msg, sizeof(msg) - sizeof(msg.mtype), 0) == -1) {
+                    perror("Failed to send cargo handling message");
+                    exit(1);
+                }
+
+                ships_in_docks[dock].cargo[empty_slot] = dock_storage[dock][chosenCargoId];  // Load
+                dock_storage[dock][chosenCargoId] = 0;  // Mark as used
+                used_dock_storage[chosenCargoId] = 1;
+                lastHandledCargoTs[dock] = TimeStep;
+
+                printf("LOAD: Ship %d - cargo_id %d - weight %d - into slot %d using crane %d\n",
+                       ships_in_docks[dock].shipId,
+                       chosenCargoId,
+                       ships_in_docks[dock].cargo[empty_slot],
+                       empty_slot,
+                       craneId);
+            }
         }
     }
 }
